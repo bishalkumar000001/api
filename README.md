@@ -1,24 +1,3 @@
-
-## 🔐 Heroku API Key
-
-Set this Config Var in Heroku:
-
-`API_KEY=<your-long-secret-key>`
-
-Protected endpoints accept either:
-
-`/download?url=VIDEO_ID&type=audio&api_key=YOUR_KEY`
-
-or the header:
-
-`X-API-KEY: YOUR_KEY`
-
-`/health` and `/` remain public for monitoring and the developer portal.
-
-## 🚀 Heroku Process
-
-This project includes a `Procfile` using Heroku's `$PORT` and a single Uvicorn worker. Do not use a fixed port such as `7474` or recursively execute `start.sh`.
-
 <div align="center">
 
 <img src="https://files.catbox.moe/6u7xjj.jpg" alt="COOKIE API Main Banner" width="100%" />
@@ -109,3 +88,6 @@ Distributed under the MIT License.
 <div align="center">
   <p>Made with ❤️ by <b>@Smugllers</b></p>
 </div>
+## API Authentication
+
+Protected API endpoints require the `X-API-Key` header. Configure `API_KEY` in your hosting environment. `/` and `/health` remain public.
