@@ -1776,51 +1776,146 @@ async def get_thumbnail(
 
 
 # =========================================================
-# AUDIO DOWNLOAD API
+# AUDIO / VIDEO DOWNLOAD API
 # =========================================================
 
 @app.get("/download")
-async def download_audio(
+async def download_media(
 
     _: bool = Depends(require_api_key),
 
     url: str = Query(
         ...,
-        description="YouTube URL"
+        description="YouTube URL or video ID"
+    ),
+
+    type: str = Query(
+        "audio",
+        description="Media type: audio or video"
+    ),
+
+    response: str = Query(
+        "file",
+        description="Response mode: file or json"
     )
 ):
+    """Download audio or video and return the actual media by default.
+
+    /download?url=VIDEO_ID&type=audio -> MP3
+    /download?url=VIDEO_ID&type=video -> MP4
+    Add response=json when metadata JSON is required.
+    """
+
+    media_type = type.strip().lower()
+    response_mode = response.strip().lower()
+
+    if media_type not in {"audio", "video"}:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Invalid media type",
+                "message": "type must be either 'audio' or 'video'"
+            }
+        )
+
+    if response_mode not in {"file", "json"}:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Invalid response mode",
+                "message": "response must be either 'file' or 'json'"
+            }
+        )
 
     try:
+        downloader = (
+            download_audio_sync
+            if media_type == "audio"
+            else download_video_sync
+        )
 
         result = await asyncio.to_thread(
-            download_audio_sync,
+            downloader,
             url
         )
 
-        return JSONResponse(
-            content=result
+        if response_mode == "json":
+            return JSONResponse(content=result)
+
+        file_path = result.get("path")
+        filename = result.get("filename") or os.path.basename(file_path or "")
+
+        if not file_path or not os.path.isfile(file_path):
+            logger.error(
+                f"{media_type.title()} result points to missing file: {file_path}"
+            )
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": f"{media_type.title()} file not found",
+                    "message": (
+                        f"The cached/downloaded {media_type} file is no longer available. "
+                        "A new download may be required."
+                    )
+                }
+            )
+
+        size = os.path.getsize(file_path)
+        if size <= 0:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": f"Invalid {media_type} file",
+                    "message": "The downloaded file is empty."
+                }
+            )
+
+        if media_type == "audio":
+            content_type = "audio/mpeg"
+            title_header = "X-Audio-Title"
+        else:
+            ext = os.path.splitext(filename)[1].lower()
+            content_type = {
+                ".mp4": "video/mp4",
+                ".webm": "video/webm",
+                ".mkv": "video/x-matroska"
+            }.get(ext, "video/mp4")
+            title_header = "X-Video-Title"
+
+        logger.info(
+            f"Serving {media_type} file: {filename} ({size} bytes)"
         )
+
+        return FileResponse(
+            path=file_path,
+            filename=filename,
+            media_type=content_type,
+            headers={
+                "X-Video-ID": str(result.get("videoId") or ""),
+                title_header: str(result.get("title") or "")[:500],
+                "X-Media-Type": media_type,
+                "X-API-Response": "file"
+            }
+        )
+
+    except HTTPException:
+        raise
 
     except Exception as e:
-
         logger.error(
-            f"Audio download API error: {e}"
+            f"{media_type.title()} download API error: {e}"
         )
-
         raise HTTPException(
             status_code=500,
             detail={
-
-                "error":
-                    "Audio download failed",
-
-                "message":
-                    str(e)
+                "error": f"{media_type.title()} download failed",
+                "message": str(e)
             }
         )
 
 
 # =========================================================
+
 # VIDEO DOWNLOAD API
 # =========================================================
 
