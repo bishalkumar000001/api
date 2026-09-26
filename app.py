@@ -42,7 +42,7 @@ CACHE_EXPIRE_HOURS = float(
 
 MAX_VIDEO_QUALITY = os.getenv(
     "MAX_VIDEO_QUALITY",
-    "720"
+    "2160"
 )
 
 PORT = int(
@@ -1346,10 +1346,8 @@ def download_video_sync(
     opts.update({
 
         "format":
-            f"bv*[height<={MAX_VIDEO_QUALITY}]"
-            f"[ext=mp4]+ba[ext=m4a]/"
-            f"b[height<={MAX_VIDEO_QUALITY}]"
-            f"[ext=mp4]/best",
+            f"bestvideo[height<={MAX_VIDEO_QUALITY}]+bestaudio/"
+            f"best[height<={MAX_VIDEO_QUALITY}]/best",
 
         "merge_output_format":
             "mp4",
