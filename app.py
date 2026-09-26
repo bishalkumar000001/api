@@ -57,13 +57,15 @@ COOKIE_URL = os.getenv(
     ""
 )
 
-# Optional YouTube client override.
-# Leave empty to let the current yt-dlp release choose its supported
-# default clients. Set this only when a specific client is required.
-YOUTUBE_PLAYER_CLIENTS = os.getenv(
-    "YOUTUBE_PLAYER_CLIENTS",
-    ""
-).strip()
+YOUTUBE_USE_COOKIES = os.getenv(
+    "YOUTUBE_USE_COOKIES",
+    "false"
+).strip().lower() in {"1", "true", "yes", "on"}
+
+YOUTUBE_COOKIE_FALLBACK = os.getenv(
+    "YOUTUBE_COOKIE_FALLBACK",
+    "true"
+).strip().lower() in {"1", "true", "yes", "on"}
 
 # API authentication.
 # Set API_KEY in Heroku Config Vars. X_API_KEY is supported as a fallback
@@ -791,7 +793,7 @@ def get_base_ydl_opts() -> Dict[str, Any]:
             ]
     }
 
-    if os.path.exists(
+    if YOUTUBE_USE_COOKIES and os.path.exists(
         COOKIES_FILE
     ):
 
@@ -805,6 +807,40 @@ def get_base_ydl_opts() -> Dict[str, Any]:
         )
 
     return opts
+
+
+def _is_cookie_related_youtube_error(exc: Exception) -> bool:
+
+    msg = str(exc).lower()
+    return any(term in msg for term in (
+        "sign in to confirm",
+        "confirm you’re not a bot",
+        "confirm you are not a bot",
+        "login_required",
+        "authentication",
+        "cookies",
+        "video unavailable",
+    ))
+
+
+def _run_yt_download_with_fallback(url: str, opts: Dict[str, Any]):
+
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            return ydl.extract_info(url, download=True)
+    except Exception as first_error:
+        if not YOUTUBE_COOKIE_FALLBACK or not os.path.exists(COOKIES_FILE):
+            raise
+        if not _is_cookie_related_youtube_error(first_error):
+            raise
+
+        retry_opts = dict(opts)
+        retry_opts["cookiefile"] = COOKIES_FILE
+        logger.warning(
+            "YouTube requested authentication; retrying once with cookies.txt"
+        )
+        with yt_dlp.YoutubeDL(retry_opts) as ydl:
+            return ydl.extract_info(url, download=True)
 
 
 # =========================================================
@@ -1003,16 +1039,9 @@ def download_audio_sync(
 
     opts = get_base_ydl_opts()
 
-    if YOUTUBE_PLAYER_CLIENTS:
-        opts["extractor_args"] = {
-            "youtube": [
-                f"player_client={YOUTUBE_PLAYER_CLIENTS}"
-            ]
-        }
-        logger.info(
-            f"Using configured YouTube player clients: "
-            f"{YOUTUBE_PLAYER_CLIENTS}"
-        )
+    logger.info(
+        "YouTube download: trying without cookies first"
+    )
 
     opts.update({
 
@@ -1086,108 +1115,104 @@ def download_audio_sync(
 
     try:
 
-        with yt_dlp.YoutubeDL(
+        info = _run_yt_download_with_fallback(
+            url,
             opts
-        ) as ydl:
+        )
 
-            info = ydl.extract_info(
-                url,
-                download=True
+        filename = yt_dlp.YoutubeDL(opts).prepare_filename(
+            info
+        )
+
+        base_path, _ = os.path.splitext(
+            filename
+        )
+
+        final_path = (
+            f"{base_path}.mp3"
+        )
+
+        if (
+            not os.path.isfile(
+                final_path
+            )
+            or
+            os.path.getsize(
+                final_path
+            ) == 0
+        ):
+
+            raise RuntimeError(
+                "Downloaded file is missing "
+                "or empty."
             )
 
-            filename = ydl.prepare_filename(
-                info
-            )
+        logger.info(
+            f"Successfully downloaded audio: "
+            f"{final_path}"
+        )
 
-            base_path, _ = os.path.splitext(
-                filename
-            )
+        response_data = {
 
-            final_path = (
-                f"{base_path}.mp3"
-            )
+            "status":
+                True,
 
-            if (
-                not os.path.isfile(
+            "title":
+                info.get(
+                    "title",
+                    ""
+                ),
+
+            "duration":
+                info.get(
+                    "duration",
+                    0
+                ),
+
+            "thumbnail":
+                info.get(
+                    "thumbnail",
+                    ""
+                ),
+
+            "filename":
+                os.path.basename(
                     final_path
-                )
-                or
+                ),
+
+            "path":
+                final_path,
+
+            "download_url":
+                f"/files/"
+                f"{os.path.basename(final_path)}",
+
+            "videoId":
+                info.get("id"),
+
+            "uploader":
+                info.get("uploader"),
+
+            "filesize":
                 os.path.getsize(
                     final_path
-                ) == 0
-            ):
-
-                raise RuntimeError(
-                    "Downloaded file is missing "
-                    "or empty."
                 )
+        }
 
-            logger.info(
-                f"Successfully downloaded audio: "
-                f"{final_path}"
-            )
+        save_cached_metadata(
+            response_data,
+            "mp3"
+        )
 
-            response_data = {
-
-                "status":
-                    True,
-
-                "title":
-                    info.get(
-                        "title",
-                        ""
-                    ),
-
-                "duration":
-                    info.get(
-                        "duration",
-                        0
-                    ),
-
-                "thumbnail":
-                    info.get(
-                        "thumbnail",
-                        ""
-                    ),
-
-                "filename":
-                    os.path.basename(
-                        final_path
-                    ),
-
-                "path":
-                    final_path,
-
-                "download_url":
-                    f"/files/"
-                    f"{os.path.basename(final_path)}",
-
-                "videoId":
-                    info.get("id"),
-
-                "uploader":
-                    info.get("uploader"),
-
-                "filesize":
-                    os.path.getsize(
-                        final_path
-                    )
-            }
-
-            save_cached_metadata(
-                response_data,
-                "mp3"
-            )
-
-            return response_data
+        return response_data
 
     except yt_dlp.utils.DownloadError as e:
-
+    
         logger.error(
             f"yt-dlp error downloading audio "
             f"for {url}: {e}"
         )
-
+    
         raise RuntimeError(
             f"Download Error: {str(e)}"
         )
@@ -1354,16 +1379,9 @@ def download_video_sync(
 
     opts = get_base_ydl_opts()
 
-    if YOUTUBE_PLAYER_CLIENTS:
-        opts["extractor_args"] = {
-            "youtube": [
-                f"player_client={YOUTUBE_PLAYER_CLIENTS}"
-            ]
-        }
-        logger.info(
-            f"Using configured YouTube player clients: "
-            f"{YOUTUBE_PLAYER_CLIENTS}"
-        )
+    logger.info(
+        "YouTube download: trying without cookies first"
+    )
 
     opts.update({
 
@@ -1428,136 +1446,132 @@ def download_video_sync(
 
     try:
 
-        with yt_dlp.YoutubeDL(
+        info = _run_yt_download_with_fallback(
+            url,
             opts
-        ) as ydl:
+        )
 
-            info = ydl.extract_info(
-                url,
-                download=True
+        filename = yt_dlp.YoutubeDL(opts).prepare_filename(
+            info
+        )
+
+        base_path, _ = os.path.splitext(
+            filename
+        )
+
+        final_path = (
+            f"{base_path}.mp4"
+        )
+
+        # -----------------------------------------
+        # Check possible output extensions
+        # -----------------------------------------
+
+        for ext in [
+            ".mp4",
+            ".webm",
+            ".mkv"
+        ]:
+
+            test_path = (
+                f"{base_path}{ext}"
             )
 
-            filename = ydl.prepare_filename(
-                info
-            )
-
-            base_path, _ = os.path.splitext(
-                filename
-            )
-
-            final_path = (
-                f"{base_path}.mp4"
-            )
-
-            # -----------------------------------------
-            # Check possible output extensions
-            # -----------------------------------------
-
-            for ext in [
-                ".mp4",
-                ".webm",
-                ".mkv"
-            ]:
-
-                test_path = (
-                    f"{base_path}{ext}"
-                )
-
-                if (
-                    os.path.isfile(
-                        test_path
-                    )
-                    and
-                    os.path.getsize(
-                        test_path
-                    ) > 0
-                ):
-
-                    final_path = test_path
-
-                    break
-
-            if not (
+            if (
                 os.path.isfile(
-                    final_path
+                    test_path
                 )
                 and
                 os.path.getsize(
-                    final_path
+                    test_path
                 ) > 0
             ):
 
-                raise RuntimeError(
-                    "Downloaded file not found "
-                    "or is empty."
+                final_path = test_path
+
+                break
+
+        if not (
+            os.path.isfile(
+                final_path
+            )
+            and
+            os.path.getsize(
+                final_path
+            ) > 0
+        ):
+
+            raise RuntimeError(
+                "Downloaded file not found "
+                "or is empty."
+            )
+
+        logger.info(
+            f"Successfully downloaded video: "
+            f"{final_path}"
+        )
+
+        response_data = {
+
+            "status":
+                True,
+
+            "title":
+                info.get(
+                    "title",
+                    ""
+                ),
+
+            "thumbnail":
+                info.get(
+                    "thumbnail",
+                    ""
+                ),
+
+            "filename":
+                os.path.basename(
+                    final_path
+                ),
+
+            "path":
+                final_path,
+
+            "download_url":
+                f"/files/"
+                f"{os.path.basename(final_path)}",
+
+            "duration":
+                info.get(
+                    "duration",
+                    0
+                ),
+
+            "videoId":
+                info.get("id"),
+
+            "uploader":
+                info.get("uploader"),
+
+            "filesize":
+                os.path.getsize(
+                    final_path
                 )
+        }
 
-            logger.info(
-                f"Successfully downloaded video: "
-                f"{final_path}"
-            )
+        save_cached_metadata(
+            response_data,
+            "mp4"
+        )
 
-            response_data = {
-
-                "status":
-                    True,
-
-                "title":
-                    info.get(
-                        "title",
-                        ""
-                    ),
-
-                "thumbnail":
-                    info.get(
-                        "thumbnail",
-                        ""
-                    ),
-
-                "filename":
-                    os.path.basename(
-                        final_path
-                    ),
-
-                "path":
-                    final_path,
-
-                "download_url":
-                    f"/files/"
-                    f"{os.path.basename(final_path)}",
-
-                "duration":
-                    info.get(
-                        "duration",
-                        0
-                    ),
-
-                "videoId":
-                    info.get("id"),
-
-                "uploader":
-                    info.get("uploader"),
-
-                "filesize":
-                    os.path.getsize(
-                        final_path
-                    )
-            }
-
-            save_cached_metadata(
-                response_data,
-                "mp4"
-            )
-
-            return response_data
+        return response_data
 
     except yt_dlp.utils.DownloadError as e:
-
+    
         logger.error(
             f"yt-dlp error downloading video "
             f"for {url}: {e}"
         )
-
+    
         raise RuntimeError(
             f"Download Error: {str(e)}"
         )
