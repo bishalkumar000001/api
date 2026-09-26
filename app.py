@@ -57,6 +57,14 @@ COOKIE_URL = os.getenv(
     ""
 )
 
+# Optional YouTube client override.
+# Leave empty to let the current yt-dlp release choose its supported
+# default clients. Set this only when a specific client is required.
+YOUTUBE_PLAYER_CLIENTS = os.getenv(
+    "YOUTUBE_PLAYER_CLIENTS",
+    ""
+).strip()
+
 # API authentication.
 # Set API_KEY in Heroku Config Vars. X_API_KEY is supported as a fallback
 # for compatibility with older deployments.
@@ -995,6 +1003,17 @@ def download_audio_sync(
 
     opts = get_base_ydl_opts()
 
+    if YOUTUBE_PLAYER_CLIENTS:
+        opts["extractor_args"] = {
+            "youtube": [
+                f"player_client={YOUTUBE_PLAYER_CLIENTS}"
+            ]
+        }
+        logger.info(
+            f"Using configured YouTube player clients: "
+            f"{YOUTUBE_PLAYER_CLIENTS}"
+        )
+
     opts.update({
 
         "format":
@@ -1017,13 +1036,6 @@ def download_audio_sync(
                     "192"
             }
         ],
-
-        "extractor_args": {
-
-            "youtube": [
-                "player_client=ios,android,web"
-            ]
-        },
 
         # -----------------------------------------
         # ENV CONFIGURABLE SPEED SETTINGS
@@ -1342,6 +1354,17 @@ def download_video_sync(
 
     opts = get_base_ydl_opts()
 
+    if YOUTUBE_PLAYER_CLIENTS:
+        opts["extractor_args"] = {
+            "youtube": [
+                f"player_client={YOUTUBE_PLAYER_CLIENTS}"
+            ]
+        }
+        logger.info(
+            f"Using configured YouTube player clients: "
+            f"{YOUTUBE_PLAYER_CLIENTS}"
+        )
+
     opts.update({
 
         "format":
@@ -1358,13 +1381,6 @@ def download_video_sync(
 
         "embedthumbnail":
             False,
-
-        "extractor_args": {
-
-            "youtube": [
-                "player_client=ios,android,web"
-            ]
-        },
 
         # -----------------------------------------
         # ENV CONFIGURABLE SPEED SETTINGS
