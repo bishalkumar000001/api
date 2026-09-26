@@ -1,1 +1,1 @@
-web: exec uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1 --timeout-keep-alive 30
+web: exec uvicorn app:app --host 0.0.0.0 --port $PORT --workers 1 --timeout-keep-alive 30
