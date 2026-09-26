@@ -8,12 +8,12 @@ Add these buildpacks to the Heroku app:
 
 ```bash
 heroku buildpacks:clear
-heroku buildpacks:add --index 1 https://github.com/heroku/heroku-buildpack-activestorage-preview
 heroku buildpacks:add heroku/python
 heroku buildpacks:add heroku/nodejs
+heroku buildpacks:add https://github.com/heroku/heroku-buildpack-apt
 ```
 
-The Active Storage Preview buildpack provides FFmpeg and FFprobe. `package.json` provides Node.js for yt-dlp's EJS JavaScript runtime. The `Aptfile` is not required for FFmpeg.
+The `Aptfile` installs FFmpeg. `package.json` provides Node.js for yt-dlp's EJS JavaScript runtime.
 
 ## Config Vars
 

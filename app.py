@@ -8,8 +8,7 @@ import urllib.request
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException, Query, Header, Depends, Security
-from fastapi.security import APIKeyHeader
+from fastapi import FastAPI, HTTPException, Query, Header, Depends
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -53,22 +52,17 @@ PORT = int(
     )
 )
 
-COOKIE_URL = os.getenv("COOKIE_URL", "")
+COOKIE_URL = os.getenv(
+    "COOKIE_URL",
+    ""
+)
 
 # YouTube player clients. Avoid the deprecated/problematic tv_downgraded
 # client that can cause "The page needs to be reloaded" errors.
 YOUTUBE_PLAYER_CLIENTS = os.getenv(
     "YOUTUBE_PLAYER_CLIENTS",
-    "web_embedded"
+    "default,web_embedded"
 ).strip()
-
-# YouTube can currently downgrade logged-in cookie sessions to the
-# tv_downgraded client, which may return "The page needs to be reloaded".
-# Public music/video downloads normally do not need account cookies.
-YOUTUBE_USE_COOKIES = os.getenv(
-    "YOUTUBE_USE_COOKIES",
-    "false"
-).strip().lower() in ("1", "true", "yes", "on")
 
 COOKIES_FILE = "cookies.txt"
 
@@ -84,13 +78,9 @@ DB_FILE = "cache.db"
 
 API_KEY = os.getenv("API_KEY", "").strip()
 
-# Expose the header in Swagger UI so protected endpoints can be tested
-# with the Authorize button. Query and Bearer authentication remain supported.
-api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
-
 
 async def require_api_key(
-    x_api_key: Optional[str] = Security(api_key_header),
+    x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
     authorization: Optional[str] = Header(default=None),
     api_key: Optional[str] = Query(default=None, description="API key (legacy/query compatibility)")
 ):
@@ -794,7 +784,7 @@ def get_base_ydl_opts() -> Dict[str, Any]:
             ]
     }
 
-    if YOUTUBE_USE_COOKIES and os.path.exists(
+    if os.path.exists(
         COOKIES_FILE
     ):
 
@@ -805,11 +795,6 @@ def get_base_ydl_opts() -> Dict[str, Any]:
         logger.info(
             f"Loaded cookies from "
             f"{COOKIES_FILE}"
-        )
-    elif os.path.exists(COOKIES_FILE):
-        logger.info(
-            "cookies.txt found but disabled for YouTube downloads "
-            "(YOUTUBE_USE_COOKIES=false)"
         )
 
     return opts
@@ -872,11 +857,6 @@ def download_audio_sync(
     video_id = extract_video_id(
         url
     )
-
-    # Accept both full YouTube URLs and the plain video IDs used by
-    # older Music Bot clients. yt-dlp needs a real URL to extract media.
-    if video_id and not re.match(r"^https?://", url):
-        url = f"https://www.youtube.com/watch?v={video_id}"
 
     # -----------------------------------------
     # DATABASE CACHE
@@ -1019,8 +999,7 @@ def download_audio_sync(
     opts.update({
 
         "format":
-            # Prefer any available audio format; FFmpeg converts it to MP3.
-            "bestaudio/best",
+            "140/ba[ext=m4a]/bestaudio/best",
 
         "writethumbnail":
             False,
@@ -1226,11 +1205,6 @@ def download_video_sync(
         url
     )
 
-    # Accept both full YouTube URLs and the plain video IDs used by
-    # older Music Bot clients. yt-dlp needs a real URL to extract media.
-    if video_id and not re.match(r"^https?://", url):
-        url = f"https://www.youtube.com/watch?v={video_id}"
-
     # -----------------------------------------
     # DATABASE CACHE
     # -----------------------------------------
@@ -1372,10 +1346,10 @@ def download_video_sync(
     opts.update({
 
         "format":
-            # Do not require MP4/M4A streams; YouTube often exposes
-            # WebM or other formats depending on the player client.
-            f"bestvideo[height<={MAX_VIDEO_QUALITY}]"
-            f"+bestaudio/best[height<={MAX_VIDEO_QUALITY}]/best",
+            f"bv*[height<={MAX_VIDEO_QUALITY}]"
+            f"[ext=mp4]+ba[ext=m4a]/"
+            f"b[height<={MAX_VIDEO_QUALITY}]"
+            f"[ext=mp4]/best",
 
         "merge_output_format":
             "mp4",
@@ -1812,49 +1786,16 @@ async def download_audio(
 
     url: str = Query(
         ...,
-        description="YouTube URL or video ID"
-    ),
-
-    type: Optional[str] = Query(
-        default=None,
-        description="Legacy Music Bot mode: audio or video"
+        description="YouTube URL"
     )
 ):
 
     try:
 
-        requested_type = (type or "").strip().lower()
-        if requested_type not in ("", "audio", "video"):
-            raise HTTPException(
-                status_code=400,
-                detail="type must be audio or video"
-            )
-
-        # The legacy bot uses /download?type=video. Keep that contract
-        # working without changing the modern JSON response by default.
-        if requested_type == "video":
-            result = await asyncio.to_thread(
-                download_video_sync,
-                url
-            )
-        else:
-            result = await asyncio.to_thread(
-                download_audio_sync,
-                url
-            )
-
-        if requested_type:
-            file_path = result.get("path") if isinstance(result, dict) else None
-            if not file_path or not os.path.isfile(file_path):
-                raise HTTPException(
-                    status_code=500,
-                    detail="Download completed without a readable file"
-                )
-            return FileResponse(
-                path=file_path,
-                filename=result.get("filename") or os.path.basename(file_path),
-                media_type="video/mp4" if requested_type == "video" else "audio/mpeg"
-            )
+        result = await asyncio.to_thread(
+            download_audio_sync,
+            url
+        )
 
         return JSONResponse(
             content=result
