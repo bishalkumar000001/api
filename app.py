@@ -8,7 +8,7 @@ import urllib.request
 from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException, Query, Header, Depends
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -56,15 +56,6 @@ COOKIE_URL = os.getenv(
     "COOKIE_URL",
     ""
 )
-
-# API authentication.
-# Set API_KEY in Heroku Config Vars. X_API_KEY is supported as a fallback
-# for compatibility with older deployments.
-API_KEY = (
-    os.getenv("API_KEY")
-    or os.getenv("X_API_KEY")
-    or ""
-).strip()
 
 COOKIES_FILE = "cookies.txt"
 
@@ -579,46 +570,6 @@ app = FastAPI(
     version="2.2.0-Production",
     lifespan=lifespan
 )
-
-
-# =========================================================
-# API KEY AUTHENTICATION
-# =========================================================
-
-async def require_api_key(
-    api_key: Optional[str] = Query(
-        None,
-        description="API key"
-    ),
-    x_api_key: Optional[str] = Header(
-        None,
-        alias="X-API-KEY"
-    )
-):
-    """
-    Accept the API key either as ?api_key=... or X-API-KEY: ...
-    Health/root remain public so Heroku can monitor the service.
-    """
-    if not API_KEY:
-        logger.error("API_KEY is not configured in the environment.")
-        raise HTTPException(
-            status_code=500,
-            detail="API authentication is not configured. Set the API_KEY environment variable."
-        )
-
-    supplied_key = (
-        x_api_key
-        or api_key
-        or ""
-    ).strip()
-
-    if not supplied_key or supplied_key != API_KEY:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or missing API key."
-        )
-
-    return True
 
 
 # =========================================================
@@ -1603,7 +1554,6 @@ async def health_check():
 
 @app.get("/search")
 async def search_youtube_music(
-    _authorized: bool = Depends(require_api_key),
 
     q: str = Query(
         ...,
@@ -1736,7 +1686,6 @@ async def search_youtube_music(
 
 @app.get("/thumbnail")
 async def get_thumbnail(
-    _authorized: bool = Depends(require_api_key),
 
     url: str = Query(
         ...,
@@ -1778,7 +1727,6 @@ async def get_thumbnail(
 
 @app.get("/download")
 async def download_audio(
-    _authorized: bool = Depends(require_api_key),
 
     url: str = Query(
         ...,
@@ -1822,7 +1770,6 @@ async def download_audio(
 
 @app.get("/video")
 async def download_video(
-    _authorized: bool = Depends(require_api_key),
 
     url: str = Query(
         ...,
